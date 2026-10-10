@@ -1,0 +1,30 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Doctor's database and data folder
+data/
+*.db
+*.db-*
+
+# Your own configuration; copy the .example files to start
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
+*.local.yml
+nas/
+
+# Mihon backups hold your whole library
+*.tachibk
+
+# Internal research and planning notes
+docs/
+
+# OS and editor clutter
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.sync.txz

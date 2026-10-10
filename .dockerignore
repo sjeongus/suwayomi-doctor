@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+doctor-data
+*.db
+*.db-*
+.env
+.env.*
+*.local.yml
+docker-compose.override.yml
+*.tachibk
+.git
+.sync.txz
+nas

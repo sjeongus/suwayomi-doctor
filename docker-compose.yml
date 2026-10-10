@@ -1,0 +1,40 @@
+# Suwayomi Doctor. Settings live in .env: copy .env.example to .env and fill it in, then
+#   docker compose up -d           runs the published image (DOCTOR_IMAGE)
+#   docker compose up -d --build   builds the image from this folder instead
+# and open http://<host>:4568 (or your DOCTOR_PORT).
+#
+# On a NAS or Docker UI (Arcane, Portainer...) that has only this file and .env, not the
+# source code, delete the `build: .` line so it always pulls the image.
+
+name: suwayomi-doctor
+
+services:
+  suwayomi-doctor:
+    image: ${DOCTOR_IMAGE:-ghcr.io/sjeongus/suwayomi-doctor:latest}
+    build: .
+    container_name: suwayomi-doctor
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: .env
+    volumes:
+      - ${DOCTOR_DATA:-doctor-data}:/data
+    ports:
+      - "${DOCTOR_PORT:-4568}:8080"
+    # Optional: join the Docker network Suwayomi is on, so SUWAYOMI_URL can use its
+    # container name (e.g. http://suwayomi:4567), and add reverse-proxy labels.
+    # Uncomment these and the `networks:` block at the bottom.
+    # networks:
+    #   - suwayomi
+    # labels:
+    #   - traefik.enable=true
+    #   - traefik.docker.network=suwayomi-net
+    #   - traefik.http.routers.suwayomi-doctor.rule=Host(`doctor.example.com`)
+    #   - traefik.http.services.suwayomi-doctor.loadbalancer.server.port=8080
+
+volumes:
+  doctor-data:
+
+# networks:
+#   suwayomi:
+#     name: suwayomi-net   # the existing network, as `docker network ls` shows it
+#     external: true
