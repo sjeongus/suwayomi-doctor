@@ -4,8 +4,8 @@ import { gunzipSync } from 'node:zlib';
 // protobuf `Backup` message; field numbers follow Mihon's backup models:
 //   Backup:       1 backupManga (repeated), 101 backupSources (repeated)
 //   BackupManga:  1 source (int64), 2 url, 3 title, 4 artist, 5 author, 6 description,
-//                 18 tracking (repeated), 100 favorite (bool, defaults to true)
-//   BackupTracking: 1 syncId (tracker), 3 mediaIdInt (old), 5 title, 100 mediaId (int64)
+//                 9 thumbnailUrl, 18 tracking (repeated), 100 favorite (bool, defaults to true)
+//   BackupTracking: 1 syncId (tracker), 3 mediaIdInt (old), 4 trackingUrl, 5 title, 100 mediaId (int64)
 //   BackupSource: 1 name, 2 sourceId (int64)
 
 export interface MihonTrack {
@@ -15,6 +15,8 @@ export interface MihonTrack {
   remoteId: string;
   /** The title the tracker uses, often the romanized or English one. */
   title: string;
+  /** The link Mihon keeps for the tracker entry. For the Suwayomi tracker it includes the server address. */
+  trackingUrl: string;
 }
 
 export interface MihonManga {
@@ -24,6 +26,8 @@ export interface MihonManga {
   author: string;
   artist: string;
   description: string;
+  /** Absolute cover link; for Suwayomi entries it names the server address the entry was last refreshed from. */
+  thumbnailUrl: string;
   tracks: MihonTrack[];
   favorite: boolean;
 }
@@ -97,21 +101,22 @@ function int64(v: bigint): string {
 }
 
 function readTrack(buf: Uint8Array): MihonTrack {
-  const t = { trackerId: 0, remoteId: '0', oldRemoteId: '0', title: '' };
+  const t = { trackerId: 0, remoteId: '0', oldRemoteId: '0', title: '', trackingUrl: '' };
   const r = new Reader(buf);
   r.fields((field, wire) => {
     if (field === 1 && wire === 0) t.trackerId = Number(r.varint());
     else if (field === 3 && wire === 0) t.oldRemoteId = int64(r.varint());
+    else if (field === 4 && wire === 2) t.trackingUrl = utf8.decode(r.bytes());
     else if (field === 5 && wire === 2) t.title = utf8.decode(r.bytes());
     else if (field === 100 && wire === 0) t.remoteId = int64(r.varint());
     else return false;
     return true;
   });
-  return { trackerId: t.trackerId, remoteId: t.remoteId !== '0' ? t.remoteId : t.oldRemoteId, title: t.title };
+  return { trackerId: t.trackerId, remoteId: t.remoteId !== '0' ? t.remoteId : t.oldRemoteId, title: t.title, trackingUrl: t.trackingUrl };
 }
 
 function readManga(buf: Uint8Array): MihonManga {
-  const m: MihonManga = { sourceId: '0', url: '', title: '', author: '', artist: '', description: '', tracks: [], favorite: true };
+  const m: MihonManga = { sourceId: '0', url: '', title: '', author: '', artist: '', description: '', thumbnailUrl: '', tracks: [], favorite: true };
   const r = new Reader(buf);
   r.fields((field, wire) => {
     if (field === 1 && wire === 0) m.sourceId = int64(r.varint());
@@ -120,6 +125,7 @@ function readManga(buf: Uint8Array): MihonManga {
     else if (field === 4 && wire === 2) m.artist = utf8.decode(r.bytes());
     else if (field === 5 && wire === 2) m.author = utf8.decode(r.bytes());
     else if (field === 6 && wire === 2) m.description = utf8.decode(r.bytes());
+    else if (field === 9 && wire === 2) m.thumbnailUrl = utf8.decode(r.bytes());
     else if (field === 18 && wire === 2) m.tracks.push(readTrack(r.bytes()));
     else if (field === 100 && wire === 0) m.favorite = r.varint() !== 0n;
     else return false;

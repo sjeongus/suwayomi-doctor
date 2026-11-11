@@ -107,6 +107,45 @@ describe('orphans', () => {
     expect(r.looksLikeOtherServer).toBe(false);
   });
 
+  it('finds library entries saved under another server address', () => {
+    const entry = (id: number, title: string, cover: string, tracker?: string) =>
+      bytes(1, [
+        ...int(1, SUWA),
+        ...str(2, String(id)),
+        ...str(3, title),
+        ...str(9, `${cover}/api/v1/manga/${id}/thumbnail`),
+        ...(tracker ? bytes(18, [...int(1, 9), ...str(4, `${tracker}/api/v1/manga/${id}`), ...str(5, title)]) : []),
+        ...(tracker ? bytes(18, [...int(1, 2), ...str(4, 'https://anilist.co/manga/5'), ...int(100, 5)]) : []),
+      ]);
+    const good = 'https://tachidesk.tail.ts.net';
+    const b = parseBackup(
+      gzipSync(
+        Buffer.from([
+          ...entry(1, 'Healthy Hero', good, good),
+          ...entry(2, 'Old Ongoing', good, 'http://192.168.1.5:4567'),
+          ...entry(7, 'Removed Rider', 'http://192.168.1.5:4567'),
+          ...entry(8, 'Local Cover', 'http://LOCAL:4567'),
+          ...bytes(101, [...str(1, 'Suwayomi'), ...int(2, SUWA)]),
+        ]),
+      ),
+    );
+    const sourceId = SUWA.toString();
+    const srv = new Map(server).set(8, facts(8, 'Local Cover', true));
+    const { addresses: a } = classify(sourceOptions(b), sourceId, entriesFor(b, sourceId), srv, () => null);
+    expect(a.suggested).toBe(good);
+    expect(a.seen).toEqual([
+      { origin: good, covers: 2, trackers: 1 },
+      { origin: 'http://192.168.1.5:4567', covers: 0, trackers: 1 },
+      { origin: 'http://local:4567', covers: 1, trackers: 0 },
+    ]);
+    // Removed Rider is on its way out, so it isn't listed.
+    expect(a.entries.map((e) => [e.title, e.cover, e.tracker])).toEqual([
+      ['Healthy Hero', good, good],
+      ['Local Cover', 'http://local:4567', null],
+      ['Old Ongoing', good, 'http://192.168.1.5:4567'],
+    ]);
+  });
+
   it('returns no source when nothing looks like Suwayomi, unless one is picked', () => {
     const options = sourceOptions(parseBackup(backup())).filter((o) => !o.isSuwayomi);
     expect(pickSource(options, undefined)).toBeNull();

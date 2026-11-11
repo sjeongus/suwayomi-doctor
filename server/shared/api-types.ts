@@ -183,4 +183,24 @@ export interface MihonCheckResult {
   looksLikeOtherServer: boolean;
   /** The AniList lookup for titles that didn't match locally; null when there was nothing to look up. */
   anilist: { looked: number; matched: number; error: string | null } | null;
+  /** Server addresses each entry still in the library carries, to find ones saved under an old address. */
+  addresses: MihonAddresses;
+}
+
+export interface MihonAddressEntry {
+  title: string;
+  mangaId: number | null;
+  /** Origin (scheme, host, port) of the cover link, or null when it has none. */
+  cover: string | null;
+  /** Origin of the Suwayomi tracker link, or null when the entry isn't tracked with it. */
+  tracker: string | null;
+}
+
+export interface MihonAddresses {
+  /** The address most entries use, offered as the right one. */
+  suggested: string | null;
+  /** Every address seen, most used first. */
+  seen: { origin: string; covers: number; trackers: number }[];
+  /** Entries that aren't being removed (still in the library, or unsure). */
+  entries: MihonAddressEntry[];
 }

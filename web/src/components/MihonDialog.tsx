@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { Check, ChevronRight, Copy, FileUp, Loader2, Smartphone, TriangleAlert, X } from 'lucide-react';
-import { checkMihonBackup, type MihonCheckResult, type MihonEntry } from '../api';
+import { checkMihonBackup, type MihonAddressEntry, type MihonAddresses, type MihonCheckResult, type MihonEntry } from '../api';
 import { Button, relTime } from './ui';
 
 export function MihonDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -11,12 +11,24 @@ export function MihonDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [useAniList, setUseAniList] = useState(true);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // A file dropped beside the panel would otherwise make the browser open or download it.
+    const stray = (e: globalThis.DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('dragover', stray);
+    window.addEventListener('drop', stray);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('dragover', stray);
+      window.removeEventListener('drop', stray);
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -35,6 +47,34 @@ export function MihonDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
+  const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files');
+  const drop = {
+    onDragEnter: (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current++;
+      setDragging(true);
+    },
+    onDragOver: (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = busy ? 'none' : 'copy';
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragging(false);
+    },
+    onDrop: (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragging(false);
+      const f = e.dataTransfer.files[0];
+      if (f && !busy) void check(f);
+    },
+  };
+
   const orphans = result ? [...result.removed, ...result.deleted].sort((a, b) => a.title.localeCompare(b.title)) : [];
   const copyList = () => {
     void navigator.clipboard?.writeText(orphans.map((o) => o.title).join('\n'));
@@ -49,8 +89,16 @@ export function MihonDialog({ open, onClose }: { open: boolean; onClose: () => v
         role="dialog"
         aria-modal="true"
         aria-label="Clean up Mihon"
+        {...drop}
         className="scroll-thin relative max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
       >
+        {dragging && (
+          <div className="pointer-events-none absolute inset-2 z-10 grid place-items-center rounded-xl border-2 border-dashed border-violet-500 bg-violet-50/90 text-sm font-medium text-violet-700 dark:bg-violet-950/90 dark:text-violet-200">
+            <span className="flex items-center gap-2">
+              <FileUp className="size-5" /> Drop the .tachibk backup to check it
+            </span>
+          </div>
+        )}
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 className="flex items-center gap-2 text-lg font-semibold">
@@ -70,7 +118,7 @@ export function MihonDialog({ open, onClose }: { open: boolean; onClose: () => v
           <li>
             In Mihon, go to <b>More → Settings → Data and storage → Create backup</b>.
           </li>
-          <li>Get the .tachibk file onto this device and choose it below.</li>
+          <li>Get the .tachibk file onto this device and choose it below, or drop it onto this window.</li>
         </ol>
 
         <input
@@ -197,6 +245,7 @@ export function MihonDialog({ open, onClose }: { open: boolean; onClose: () => v
                       : `Your server has "${e.serverTitle}" under this id, and Doctor found nothing linking the two (no shared tracker, similar title, author, or AniList entry).`
                   }
                 />
+                <AddressSection key={`${file.name}-${result.sourceId}`} addresses={result.addresses} />
               </>
             )}
           </div>
@@ -254,6 +303,114 @@ function EntrySection({
         </ul>
       )}
     </section>
+  );
+}
+
+type AddressRow = { entry: MihonAddressEntry; cover: boolean; tracker: boolean };
+
+/** Library entries whose cover or Suwayomi tracker link points at a server address other than the chosen one. */
+function AddressSection({ addresses }: { addresses: MihonAddresses }) {
+  const [expected, setExpected] = useState(addresses.suggested ?? '');
+  const [copied, setCopied] = useState<string | null>(null);
+  if (addresses.seen.length === 0) return null;
+
+  const groups = new Map<string, AddressRow[]>();
+  for (const e of addresses.entries) {
+    const cover = !!e.cover && e.cover !== expected;
+    const tracker = !!e.tracker && e.tracker !== expected;
+    if (!cover && !tracker) continue;
+    // Group by the wrong address; when both are wrong the tracker's decides.
+    const origin = (tracker ? e.tracker : e.cover)!;
+    groups.set(origin, [...(groups.get(origin) ?? []), { entry: e, cover, tracker }]);
+  }
+  const total = [...groups.values()].reduce((n, g) => n + g.length, 0);
+  const copy = (origin: string, titles: string[]) => {
+    void navigator.clipboard?.writeText(titles.join('\n'));
+    setCopied(origin);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
+  return (
+    <section className="space-y-2 border-t border-zinc-200 pt-5 dark:border-zinc-800">
+      <h3 className="text-sm font-semibold">
+        Saved under another server address <span className="font-normal text-zinc-500">{total}</span>
+      </h3>
+      <p className="text-xs text-zinc-500">
+        Mihon keeps the server address in each series' cover link and Suwayomi tracker link, as it was when the series was added or
+        last tracked. These series, still in your library, use an address other than the one below.
+      </p>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-zinc-600 dark:text-zinc-400">Correct address</span>
+        <select
+          value={expected}
+          onChange={(e) => setExpected(e.target.value)}
+          className="h-8 max-w-full rounded-lg border-0 bg-white px-2 text-sm ring-1 ring-inset ring-zinc-300 focus:ring-2 focus:ring-violet-500 focus:outline-none dark:bg-zinc-950 dark:ring-zinc-700"
+        >
+          {addresses.seen.map((s) => (
+            <option key={s.origin} value={s.origin}>
+              {s.origin} ({[s.covers && `${s.covers} covers`, s.trackers && `${s.trackers} tracked`].filter(Boolean).join(', ')})
+            </option>
+          ))}
+        </select>
+      </div>
+      {total === 0 ? (
+        <p className="text-sm">Every series uses this address.</p>
+      ) : (
+        <>
+          <p className="text-xs text-zinc-500">
+            To fix one in Mihon: for a wrong <b>cover</b>, open the series and pull down to refresh it. For a wrong <b>tracker</b>,
+            open the series, tap <b>Tracking</b>, remove Suwayomi and add it again.
+          </p>
+          {[...groups.entries()]
+            .sort((a, b) => b[1].length - a[1].length)
+            .map(([origin, rows]) => (
+              <AddressGroup
+                key={origin}
+                origin={origin}
+                rows={rows}
+                copied={copied === origin}
+                onCopy={() => copy(origin, rows.map((r) => r.entry.title))}
+              />
+            ))}
+        </>
+      )}
+    </section>
+  );
+}
+
+function AddressGroup({ origin, rows, copied, onCopy }: { origin: string; rows: AddressRow[]; copied: boolean; onCopy: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((x) => !x)}
+          aria-expanded={expanded}
+          className="flex min-w-0 items-center gap-1.5 text-left text-sm font-medium"
+        >
+          <ChevronRight className={`size-4 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          <span className="truncate font-mono text-xs">{origin}</span>
+          <span className="font-normal text-zinc-500">{rows.length}</span>
+        </button>
+        <Button size="sm" onClick={onCopy}>
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          {copied ? 'Copied' : `Copy ${rows.length} titles`}
+        </Button>
+      </div>
+      {expanded && (
+        <ul className="mt-2 divide-y divide-zinc-200 rounded-xl ring-1 ring-zinc-200 dark:divide-zinc-800 dark:ring-zinc-800">
+          {rows.map(({ entry, cover, tracker }, i) => (
+            <li key={`${entry.mangaId}-${i}`} className="px-3 py-2">
+              <div className="text-sm font-medium">{entry.title}</div>
+              <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                {[tracker && `Tracker: ${entry.tracker}`, cover && `Cover: ${entry.cover}`].filter(Boolean).join(' · ')}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

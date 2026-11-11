@@ -1,4 +1,4 @@
-import type { MihonCheckResult, MihonEntry, MihonSourceOption } from '../shared/api-types.js';
+import type { MihonAddressEntry, MihonAddresses, MihonCheckResult, MihonEntry, MihonSourceOption } from '../shared/api-types.js';
 import type { MihonBackup, MihonManga } from './backup.js';
 import { normalize, sameSeries, type SeriesFacts } from './match.js';
 
@@ -8,6 +8,41 @@ export interface ServerManga extends SeriesFacts {
 }
 
 const SUWAYOMI_NAME = /suwayomi|tachidesk/i;
+/** Mihon's id for its Suwayomi tracker, which keeps the server address in each entry's tracking link. */
+export const SUWAYOMI_TRACKER = 9;
+
+/** "https://host:port" of a link, lowercased; null when it isn't an absolute http(s) link. */
+export function originOf(url: string): string | null {
+  try {
+    const u = new URL(url.trim());
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function addresses(entries: Entry[]): MihonAddresses {
+  const list: MihonAddressEntry[] = entries.map((e) => ({
+    title: e.title,
+    mangaId: e.mangaId,
+    cover: originOf(e.thumbnailUrl),
+    tracker: e.tracks.map((t) => (t.trackerId === SUWAYOMI_TRACKER ? originOf(t.trackingUrl) : null)).find((o) => o) ?? null,
+  }));
+  const seen = new Map<string, { origin: string; covers: number; trackers: number }>();
+  const tally = (origin: string | null, field: 'covers' | 'trackers') => {
+    if (!origin) return;
+    const row = seen.get(origin) ?? { origin, covers: 0, trackers: 0 };
+    row[field]++;
+    seen.set(origin, row);
+  };
+  for (const e of list) {
+    tally(e.cover, 'covers');
+    tally(e.tracker, 'trackers');
+  }
+  const rows = [...seen.values()].sort((a, b) => b.covers + b.trackers - (a.covers + a.trackers) || a.origin.localeCompare(b.origin));
+  list.sort((a, b) => a.title.localeCompare(b.title));
+  return { suggested: rows[0]?.origin ?? null, seen: rows, entries: list };
+}
 
 /** The Suwayomi extension stores entries as "/api/v1/manga/<id>"; a bare id is accepted too. */
 export function mangaIdFromUrl(url: string): number | null {
@@ -72,7 +107,9 @@ export function classify(
     unsure: [],
     looksLikeOtherServer: false,
     anilist: null,
+    addresses: { suggested: null, seen: [], entries: [] },
   };
+  const kept: Entry[] = [];
   for (const e of entries) {
     const s = e.mangaId === null ? undefined : server.get(e.mangaId);
     // Titles that agree need no evidence; otherwise look for some (trackers, similar or alternative titles, author, AniList).
@@ -89,7 +126,10 @@ export function classify(
     else if (!s) result.deleted.push(entry);
     else if (!s.inLibrary) result.removed.push(entry);
     else result.stillInLibrary++;
+    if (result.removed.at(-1) !== entry && result.deleted.at(-1) !== entry) kept.push(e);
   }
+  // Entries about to be removed don't need their address fixed.
+  result.addresses = addresses(kept);
   const byTitle = (a: MihonEntry, b: MihonEntry) => a.title.localeCompare(b.title);
   result.removed.sort(byTitle);
   result.deleted.sort(byTitle);
